@@ -3,13 +3,15 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import { env } from './config/env';
-import { requireAuth } from './middleware/auth';
+import { requireAdmin, requireAuth } from './middleware/auth';
 import { errorHandler, notFoundHandler } from './middleware/error';
 import authRoutes from './routes/auth';
 import categoryRoutes from './routes/categories';
 import budgetRoutes from './routes/budgets';
 import transactionRoutes from './routes/transactions';
 import summaryRoutes from './routes/summary';
+import adminRoutes from './routes/admin';
+import mfaRoutes from './routes/mfa';
 
 export function createApp() {
   const app = express();
@@ -32,11 +34,13 @@ export function createApp() {
   app.get('/', (_req, res) => res.json({ name: 'mbm.api.v1', status: 'ok' }));
   app.get('/api/health', (_req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
 
+  app.use('/api/auth/mfa', requireAuth, mfaRoutes);
   app.use('/api/auth', authRoutes);
   app.use('/api/categories', requireAuth, categoryRoutes);
   app.use('/api/budgets', requireAuth, budgetRoutes);
   app.use('/api/transactions', requireAuth, transactionRoutes);
   app.use('/api/summary', requireAuth, summaryRoutes);
+  app.use('/api/admin', requireAuth, requireAdmin, adminRoutes);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

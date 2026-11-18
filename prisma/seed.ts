@@ -56,7 +56,7 @@ async function main() {
   await prisma.user.deleteMany({ where: { email } });
 
   const user = await prisma.user.create({
-    data: { email, name: 'Demo User', passwordHash: await bcrypt.hash('demo12345', 10) },
+    data: { email, name: 'Demo User', passwordHash: await bcrypt.hash('demo12345', 10), emailVerifiedAt: new Date() },
   });
   await prisma.category.createMany({ data: defaultCategoryData(user.id) });
   const cats = await prisma.category.findMany({ where: { userId: user.id } });

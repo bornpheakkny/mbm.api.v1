@@ -23,3 +23,17 @@ services:
         value: 7d
       - key: CORS_ORIGIN
         sync: false # e.g. https://mbm-app-v1.vercel.app
+      - key: ADMIN_EMAIL
+        sync: false # root admin login, created on first start
+      - key: ADMIN_PASSWORD
+        sync: false # change it after first login
+      - key: ADMIN_NAME
+        value: Administrator
+      - key: APP_URL
+        sync: false # your Vercel URL, used in email links
+      - key: RESEND_API_KEY
+        sync: false # from resend.com → API Keys
+      - key: EMAIL_FROM
+        sync: false # e.g. Budget Manager <no-reply@yourdomain.com>
+      - key: MFA_ENCRYPTION_KEY
+        generateValue: true

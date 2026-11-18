@@ -1,8 +1,11 @@
 import { env } from './config/env';
 import { createApp } from './app';
 import { prisma } from './lib/prisma';
+import { bootstrapAdmin } from './services/bootstrapAdmin';
 
 const app = createApp();
+
+bootstrapAdmin().catch((err) => console.error('Failed to bootstrap root admin:', err));
 
 const server = app.listen(env.PORT, () => {
   console.log(`🚀 mbm.api.v1 listening on http://localhost:${env.PORT} (${env.NODE_ENV})`);

@@ -8,22 +8,51 @@ REST API for the Monthly Budget Management System.
 
 | Model | Purpose |
 | --- | --- |
-| `User` | Account, password hash (bcrypt), currency |
+| `User` | Account, password hash (bcrypt), currency, `role` (`USER` / `ADMIN`), `active`, `lastLoginAt` |
 | `Category` | Income sources and expense categories (`INCOME` / `EXPENSE`), color, archived |
 | `Budget` | Budgeted amount per category per month (`month = "YYYY-MM"`) |
 | `Transaction` | Actual income / expense entries (date, description, amount, note) |
 
 New users get default categories: Salary, Freelance, Other (income) and Rent, Utilities, Groceries, Transport, Phone & internet, Eating out, Health & insurance, Entertainment, Savings, Other (expenses).
 
+## Accounts & roles
+
+- Anyone can sign up (`/api/auth/register`). Every account is a `USER` with its **own private budget**: categories, budgets and entries are scoped by `userId`.
+- **Root admin**: on startup the API creates the account in `ADMIN_EMAIL` / `ADMIN_PASSWORD` if it doesn't exist (an existing user with that email is promoted). The root admin can't be demoted, disabled or deleted, and only they can reset their own password.
+- **Admins** manage accounts (create, edit, change role, enable/disable, reset password, delete). They cannot see other users' budget data.
+- Each request re-checks the account, so disabling or deleting a user logs them out immediately.
+- **Email verification**: sign-up sends a verification link (24 h). Unverified users can use the app; verifying proves the address for password recovery.
+- **Forgot password**: `/forgot-password` emails a reset link (1 h). Resetting signs out every session and marks the email verified. Two-step verification stays on.
+- **Two-step verification (optional, per user)**: authenticator app (TOTP, QR code) or a 6-digit email code, plus 10 one-time backup codes. 5 wrong codes end the login attempt. Admins can reset a user's 2FA.
+- **Emails** go through [Resend](https://resend.com) (HTTPS, works on Render's free plan). Without `RESEND_API_KEY` they're printed to the console. The default sender `onboarding@resend.dev` can only deliver to your own Resend account email — verify a domain in Resend and set `EMAIL_FROM` to send to anyone.
+- Login, code and email endpoints are rate-limited per IP.
+
 ## API
 
-All routes except `/api/auth/register`, `/api/auth/login` and `/api/health` need `Authorization: Bearer <token>`.
+All routes except `/api/auth/register`, `/api/auth/login` and `/api/health` need `Authorization: Bearer <token>`. `/api/admin/*` also needs the `ADMIN` role.
 
 | Method | Path | Description |
 | --- | --- | --- |
 | POST | `/api/auth/register` | `{ name, email, password, currency? }` → `{ token, user }` |
-| POST | `/api/auth/login` | `{ email, password }` → `{ token, user }` |
+| POST | `/api/auth/login` | `{ email, password }` → `{ token, user }`, or `{ mfaRequired, method, mfaToken, emailHint }` |
 | GET / PATCH | `/api/auth/me` | Current user / update `name`, `currency` |
+| POST | `/api/auth/change-password` | `{ currentPassword, newPassword }` → new `token` (other sessions signed out) |
+| POST | `/api/auth/login/mfa` | `{ mfaToken, code }` (authenticator, emailed or backup code) → `{ token, user }` |
+| POST | `/api/auth/login/mfa/resend` | `{ mfaToken }` email a new sign-in code → new `mfaToken` |
+| POST | `/api/auth/verify-email` | `{ token }` from the emailed link |
+| POST | `/api/auth/resend-verification` | Send the verification email again |
+| POST | `/api/auth/forgot-password` | `{ email }` — same reply whether or not the account exists |
+| POST | `/api/auth/reset-password` | `{ token, password }` |
+| GET | `/api/auth/mfa` | `{ method, recoveryCodesLeft, emailVerified }` |
+| POST | `/api/auth/mfa/totp/setup` · `/totp/enable` | QR + key, then `{ code, password }` → backup codes |
+| POST | `/api/auth/mfa/email/setup` · `/email/enable` | Email a code, then `{ code, password }` → backup codes |
+| POST | `/api/auth/mfa/recovery-codes` · `/disable` | `{ password }` |
+| POST | `/api/admin/users/:id/reset-mfa` | Admin: turn a user's 2FA off |
+| GET | `/api/admin/users?q=&role=&status=` | Admin: list accounts + `stats { total, admins, disabled }` |
+| POST | `/api/admin/users` | Admin: `{ name, email, password, currency?, role? }` |
+| PATCH | `/api/admin/users/:id` | Admin: `{ name?, email?, currency?, role?, active? }` |
+| POST | `/api/admin/users/:id/reset-password` | Admin: `{ password }` |
+| DELETE | `/api/admin/users/:id` | Admin: delete the account and all its data |
 | GET | `/api/categories?type=&includeArchived=` | List categories |
 | POST | `/api/categories` | `{ name, type, color? }` |
 | PATCH | `/api/categories/:id` | `{ name?, color?, sortOrder?, archived? }` |
@@ -42,10 +71,10 @@ All routes except `/api/auth/register`, `/api/auth/login` and `/api/health` need
 
 ```bash
 npm install
-cp .env.example .env          # fill DATABASE_URL, DIRECT_URL, JWT_SECRET
+cp .env.example .env          # fill DATABASE_URL, DIRECT_URL, JWT_SECRET, ADMIN_EMAIL, ADMIN_PASSWORD
 npx prisma migrate deploy     # create tables
 npm run db:seed               # optional demo user: demo@mbm.app / demo12345
-npm run dev                   # http://localhost:4000
+npm start                     # dev server with reload, http://localhost:4000 (same as npm run dev)
 ```
 
 Other scripts: `npm run lint`, `npm run typecheck`, `npm run build`, `npm run db:migrate` (create a new migration after editing `prisma/schema.prisma`), `npm run db:studio`.
@@ -66,7 +95,7 @@ Other scripts: `npm run lint`, `npm run typecheck`, `npm run build`, `npm run db
    - Build command: `npm ci --include=dev && npm run build`
    - Start command: `npm run start:prod` (runs `prisma migrate deploy`, then starts the server)
    - Health check path: `/api/health`
-3. Environment variables: `DATABASE_URL`, `DIRECT_URL`, `JWT_SECRET` (long random string), `JWT_EXPIRES_IN=7d`, `NODE_ENV=production`, `CORS_ORIGIN=https://<your-app>.vercel.app` (comma-separate several origins).
+3. Environment variables: `DATABASE_URL`, `DIRECT_URL`, `JWT_SECRET` (long random string), `JWT_EXPIRES_IN=7d`, `NODE_ENV=production`, `CORS_ORIGIN=https://<your-app>.vercel.app` (comma-separate several origins), `ADMIN_EMAIL` and `ADMIN_PASSWORD` (root admin, created on first start — change the password after logging in). For email: `APP_URL` (your Vercel URL, used in links), `RESEND_API_KEY`, `EMAIL_FROM`. `MFA_ENCRYPTION_KEY` is generated by the blueprint.
 4. After the first deploy, optionally seed: Render → Shell → `npm run db:seed`.
 
 > Render's free plan sleeps after ~15 min idle; the first request then takes ~30–60 s. The frontend uses a 30 s timeout and shows a friendly message.

@@ -18,22 +18,82 @@ datasource db {
   provider = "postgresql"
 }
 
+enum Role {
+  USER
+  ADMIN
+}
+
+enum MfaMethod {
+  TOTP
+  EMAIL
+}
+
+enum AuthTokenType {
+  EMAIL_VERIFY
+  PASSWORD_RESET
+  MFA_CHALLENGE
+  MFA_EMAIL_SETUP
+}
+
 enum CategoryType {
   INCOME
   EXPENSE
 }
 
 model User {
-  id           String        @id @default(cuid())
-  email        String        @unique
-  name         String
-  passwordHash String
-  currency     String        @default("USD")
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  categories   Category[]
-  budgets      Budget[]
-  transactions Transaction[]
+  id                String         @id @default(cuid())
+  email             String         @unique
+  name              String
+  passwordHash      String
+  currency          String         @default("USD")
+  role              Role           @default(USER)
+  active            Boolean        @default(true)
+  lastLoginAt       DateTime?
+  emailVerifiedAt   DateTime?
+  /// Bumped on password change/reset to invalidate existing sessions
+  tokenVersion      Int            @default(0)
+  /// null = two-step verification off
+  mfaMethod         MfaMethod?
+  /// AES-GCM encrypted TOTP secret (active / being set up)
+  totpSecret        String?
+  totpPendingSecret String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  categories        Category[]
+  budgets           Budget[]
+  transactions      Transaction[]
+  authTokens        AuthToken[]
+  recoveryCodes     RecoveryCode[]
+}
+
+/// One-time links and codes: email verification, password reset, MFA login challenges
+model AuthToken {
+  id        String        @id @default(cuid())
+  userId    String
+  type      AuthTokenType
+  /// sha256 of the token sent in a link / returned to the client
+  tokenHash String        @unique
+  /// sha256 of a 6-digit code sent by email (MFA)
+  codeHash  String?
+  attempts  Int           @default(0)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime      @default(now())
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+}
+
+/// One-time backup codes for two-step verification
+model RecoveryCode {
+  id        String    @id @default(cuid())
+  userId    String
+  codeHash  String
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model Category {
