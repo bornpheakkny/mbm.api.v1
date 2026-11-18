@@ -1,8 +1,9 @@
 import type { User } from '../generated/prisma/client';
+import { normalizePreferences } from './preferences';
 
 type UserFields = Pick<
   User,
-  'id' | 'email' | 'name' | 'currency' | 'role' | 'active' | 'lastLoginAt' | 'createdAt' | 'emailVerifiedAt' | 'mfaMethod' | 'pendingEmail'
+  'id' | 'email' | 'name' | 'currency' | 'role' | 'active' | 'lastLoginAt' | 'createdAt' | 'emailVerifiedAt' | 'mfaMethod' | 'pendingEmail' | 'preferences'
 >;
 
 /** Strip secrets (password hash, MFA secrets, token version) before sending a user to the client */
@@ -19,5 +20,6 @@ export function publicUser(u: UserFields) {
     emailVerified: Boolean(u.emailVerifiedAt),
     mfaMethod: u.mfaMethod,
     pendingEmail: u.pendingEmail,
+    preferences: normalizePreferences(u.preferences),
   };
 }

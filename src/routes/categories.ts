@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma';
 import { conflict, notFound } from '../lib/http';
 import { uid } from '../middleware/auth';
+import { ColorSchema } from '../lib/preferences';
 
 const router = Router();
 
@@ -11,13 +12,13 @@ const TypeSchema = z.enum(['INCOME', 'EXPENSE']);
 const CreateSchema = z.object({
   name: z.string().trim().min(1).max(60),
   type: TypeSchema,
-  color: z.string().trim().max(20).optional(),
+  color: ColorSchema.optional(),
   sortOrder: z.number().int().optional(),
 });
 
 const UpdateSchema = z.object({
   name: z.string().trim().min(1).max(60).optional(),
-  color: z.string().trim().max(20).optional(),
+  color: ColorSchema.optional(),
   sortOrder: z.number().int().optional(),
   archived: z.boolean().optional(),
 });

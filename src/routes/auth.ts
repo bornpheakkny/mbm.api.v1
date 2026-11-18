@@ -28,7 +28,8 @@ import {
   sendEmailInBackground,
   verifyEmailMessage,
 } from '../services/email';
-import type { User } from '../generated/prisma/client';
+import type { Prisma, User } from '../generated/prisma/client';
+import { PreferencesPatchSchema, normalizePreferences } from '../lib/preferences';
 
 const router = Router();
 
@@ -48,7 +49,11 @@ const RegisterSchema = z.object({
 
 const LoginSchema = z.object({ email: EmailSchema, password: z.string().min(1) });
 const MfaLoginSchema = z.object({ mfaToken: TokenSchema, code: CodeSchema });
-const UpdateMeSchema = z.object({ name: NameSchema.optional(), currency: CurrencySchema.optional() });
+const UpdateMeSchema = z.object({
+  name: NameSchema.optional(),
+  currency: CurrencySchema.optional(),
+  preferences: PreferencesPatchSchema.optional(),
+});
 const ChangePasswordSchema = z.object({ currentPassword: z.string().min(1), newPassword: PasswordSchema });
 
 /** "jo***@gmail.com" — shown on the code screen without revealing the full address */
@@ -303,9 +308,15 @@ router.get('/me', requireAuth, async (req, res) => {
   res.json({ user: publicUser(user) });
 });
 
+/** Update name, currency and/or display preferences (preferences are merged, not replaced) */
 router.patch('/me', requireAuth, async (req, res) => {
-  const body = UpdateMeSchema.parse(req.body);
-  const user = await prisma.user.update({ where: { id: uid(req) }, data: body });
+  const { preferences, ...rest } = UpdateMeSchema.parse(req.body);
+  const data: Prisma.UserUpdateInput = { ...rest };
+  if (preferences) {
+    const current = await prisma.user.findUnique({ where: { id: uid(req) }, select: { preferences: true } });
+    data.preferences = { ...normalizePreferences(current?.preferences), ...preferences };
+  }
+  const user = await prisma.user.update({ where: { id: uid(req) }, data });
   res.json({ user: publicUser(user) });
 });
 

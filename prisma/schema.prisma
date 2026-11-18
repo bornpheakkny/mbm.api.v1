@@ -53,6 +53,8 @@ model User {
   emailVerifiedAt   DateTime?
   /// New address waiting for confirmation (Change email)
   pendingEmail      String?
+  /// Display settings (bar colors, badge style); see src/lib/preferences.ts
+  preferences       Json           @default("{}")
   /// Bumped on password change/reset to invalidate existing sessions
   tokenVersion      Int            @default(0)
   /// null = two-step verification off
