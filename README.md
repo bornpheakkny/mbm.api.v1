@@ -22,6 +22,8 @@ New users get default categories: Salary, Freelance, Other (income) and Rent, Ut
 - **Admins** manage accounts (create, edit, change role, enable/disable, reset password, delete). They cannot see other users' budget data.
 - Each request re-checks the account, so disabling or deleting a user logs them out immediately.
 - **Email verification**: sign-up sends a verification link (24 h). Unverified users can use the app; verifying proves the address for password recovery.
+- **Change email / fix a typo**: `POST /api/auth/change-email` sends a link to the new address; the account switches only after it's confirmed, and the old address gets a notice. An admin changing someone's email also requires the new address to be verified.
+- **Unverified addresses don't stay taken**: a new sign-up can take over an address whose account is unverified, older than 24 h and has no entries. Unverified accounts with no entries and no login for 30 days are deleted (checked on start and every 12 h). Accounts with entries are never removed — the owner can claim them with "Forgot password".
 - **Forgot password**: `/forgot-password` emails a reset link (1 h). Resetting signs out every session and marks the email verified. Two-step verification stays on.
 - **Two-step verification (optional, per user)**: authenticator app (TOTP, QR code) or a 6-digit email code, plus 10 one-time backup codes. 5 wrong codes end the login attempt. Admins can reset a user's 2FA.
 - **Emails** go through [Resend](https://resend.com) (HTTPS, works on Render's free plan). Without `RESEND_API_KEY` they're printed to the console. The default sender `onboarding@resend.dev` can only deliver to your own Resend account email — verify a domain in Resend and set `EMAIL_FROM` to send to anyone.
@@ -41,6 +43,8 @@ All routes except `/api/auth/register`, `/api/auth/login` and `/api/health` need
 | POST | `/api/auth/login/mfa/resend` | `{ mfaToken }` email a new sign-in code → new `mfaToken` |
 | POST | `/api/auth/verify-email` | `{ token }` from the emailed link |
 | POST | `/api/auth/resend-verification` | Send the verification email again |
+| POST / DELETE | `/api/auth/change-email` | `{ newEmail, password }` start a change / cancel it |
+| POST | `/api/auth/change-email/resend` | Resend the confirmation link to the pending address |
 | POST | `/api/auth/forgot-password` | `{ email }` — same reply whether or not the account exists |
 | POST | `/api/auth/reset-password` | `{ token, password }` |
 | GET | `/api/auth/mfa` | `{ method, recoveryCodesLeft, emailVerified }` |

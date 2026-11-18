@@ -2,7 +2,7 @@ import type { User } from '../generated/prisma/client';
 
 type UserFields = Pick<
   User,
-  'id' | 'email' | 'name' | 'currency' | 'role' | 'active' | 'lastLoginAt' | 'createdAt' | 'emailVerifiedAt' | 'mfaMethod'
+  'id' | 'email' | 'name' | 'currency' | 'role' | 'active' | 'lastLoginAt' | 'createdAt' | 'emailVerifiedAt' | 'mfaMethod' | 'pendingEmail'
 >;
 
 /** Strip secrets (password hash, MFA secrets, token version) before sending a user to the client */
@@ -18,5 +18,6 @@ export function publicUser(u: UserFields) {
     createdAt: u.createdAt,
     emailVerified: Boolean(u.emailVerifiedAt),
     mfaMethod: u.mfaMethod,
+    pendingEmail: u.pendingEmail,
   };
 }

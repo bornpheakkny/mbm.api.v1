@@ -7,6 +7,9 @@ import { publicUser } from '../lib/users';
 import { requireAuth, sessionToken, uid } from '../middleware/auth';
 import { authLimiter, emailLimiter } from '../middleware/rateLimit';
 import { defaultCategoryData } from '../services/defaultCategories';
+import { isRootAdmin } from '../services/bootstrapAdmin';
+import { canReclaim } from '../services/unverifiedAccounts';
+import { sha256 } from '../lib/crypto';
 import {
   assertCooldown,
   checkSecondFactor,
@@ -17,6 +20,8 @@ import {
   remainingRecoveryCodes,
 } from '../services/authTokens';
 import {
+  confirmEmailChangeMessage,
+  emailChangedNotice,
   mfaCodeMessage,
   resetPasswordMessage,
   sendEmail,
@@ -70,11 +75,20 @@ router.post('/register', emailLimiter, async (req, res) => {
   const body = RegisterSchema.parse(req.body);
 
   const exists = await prisma.user.findUnique({ where: { email: body.email } });
-  if (exists) throw conflict('Email is already registered');
+  // An old unverified account with no entries doesn't keep the address forever (mistyped / not theirs)
+  const reclaim = exists ? await canReclaim(exists) : false;
+  if (exists && !reclaim) {
+    throw conflict(
+      exists.emailVerifiedAt
+        ? 'Email is already registered'
+        : 'This email is registered but not verified yet. If it is yours, use "Forgot password?" on the login page to claim it.',
+    );
+  }
 
   const passwordHash = await bcrypt.hash(body.password, 10);
 
   const user = await prisma.$transaction(async (tx) => {
+    if (exists && reclaim) await tx.user.delete({ where: { id: exists.id } });
     const created = await tx.user.create({
       data: { name: body.name, email: body.email, passwordHash, currency: body.currency ?? 'USD', lastLoginAt: new Date() },
     });
@@ -141,14 +155,93 @@ router.post('/login/mfa/resend', emailLimiter, async (req, res) => {
 
 // ---------- Email verification ----------
 
+/** Confirms a sign-up email (EMAIL_VERIFY) or a new address from "Change email" (EMAIL_CHANGE) */
 router.post('/verify-email', authLimiter, async (req, res) => {
   const { token } = z.object({ token: TokenSchema }).parse(req.body);
-  const row = await findLiveToken(token, 'EMAIL_VERIFY', 'This verification link is invalid or has expired.');
+  const invalid = 'This verification link is invalid or has expired.';
+  const kind = await prisma.authToken.findUnique({ where: { tokenHash: sha256(token) }, select: { type: true } });
+
+  if (kind?.type === 'EMAIL_CHANGE') {
+    const row = await findLiveToken(token, 'EMAIL_CHANGE', invalid);
+    const user = row.user;
+    const newEmail = user.pendingEmail;
+    if (!newEmail) throw badRequest('This email change was cancelled.');
+
+    const taken = await prisma.user.findUnique({ where: { email: newEmail } });
+    if (taken && taken.id !== user.id && !(await canReclaim(taken))) {
+      throw conflict(`${newEmail} is already used by another account.`);
+    }
+
+    await prisma.$transaction(async (tx) => {
+      if (taken && taken.id !== user.id) await tx.user.delete({ where: { id: taken.id } });
+      await tx.user.update({
+        where: { id: user.id },
+        data: { email: newEmail, pendingEmail: null, emailVerifiedAt: new Date() },
+      });
+      await tx.authToken.updateMany({
+        where: { userId: user.id, type: { in: ['EMAIL_CHANGE', 'EMAIL_VERIFY'] }, usedAt: null },
+        data: { usedAt: new Date() },
+      });
+    });
+    sendEmailInBackground(emailChangedNotice(user.email, user.name, newEmail));
+    return res.json({ ok: true, email: newEmail, changed: true });
+  }
+
+  const row = await findLiveToken(token, 'EMAIL_VERIFY', invalid);
   await prisma.$transaction([
     prisma.user.update({ where: { id: row.userId }, data: { emailVerifiedAt: row.user.emailVerifiedAt ?? new Date() } }),
     prisma.authToken.update({ where: { id: row.id }, data: { usedAt: new Date() } }),
   ]);
-  res.json({ ok: true, email: row.user.email });
+  res.json({ ok: true, email: row.user.email, changed: false });
+});
+
+// ---------- Change email ----------
+
+async function sendEmailChange(user: Pick<User, 'id' | 'name'>, newEmail: string) {
+  const { token } = await issueToken(user.id, 'EMAIL_CHANGE');
+  sendEmailInBackground(confirmEmailChangeMessage(newEmail, user.name, token));
+}
+
+/**
+ * Starts an email change: the new address gets a confirmation link and only replaces
+ * the current one after it is confirmed. Also how users fix a mistyped sign-up email.
+ */
+router.post('/change-email', requireAuth, emailLimiter, async (req, res) => {
+  const body = z.object({ newEmail: EmailSchema, password: z.string().min(1) }).parse(req.body);
+  const user = await prisma.user.findUnique({ where: { id: uid(req) } });
+  if (!user) throw notFound('User');
+  if (isRootAdmin(user.email)) throw forbidden('The root admin email is set by ADMIN_EMAIL on the server');
+  if (!(await bcrypt.compare(body.password, user.passwordHash))) throw badRequest('Password is incorrect');
+  if (body.newEmail === user.email) throw badRequest('That is already your email');
+
+  const taken = await prisma.user.findUnique({ where: { email: body.newEmail } });
+  if (taken && !(await canReclaim(taken))) throw conflict('Email is already registered');
+
+  await assertCooldown(user.id, 'EMAIL_CHANGE');
+  const updated = await prisma.user.update({ where: { id: user.id }, data: { pendingEmail: body.newEmail } });
+  await sendEmailChange(user, body.newEmail);
+  res.json({ user: publicUser(updated) });
+});
+
+router.post('/change-email/resend', requireAuth, emailLimiter, async (req, res) => {
+  const user = await prisma.user.findUnique({ where: { id: uid(req) } });
+  if (!user) throw notFound('User');
+  if (!user.pendingEmail) throw badRequest('There is no email change waiting for confirmation');
+  await assertCooldown(user.id, 'EMAIL_CHANGE');
+  await sendEmailChange(user, user.pendingEmail);
+  res.json({ ok: true });
+});
+
+router.delete('/change-email', requireAuth, async (req, res) => {
+  const userId = uid(req);
+  const [updated] = await prisma.$transaction([
+    prisma.user.update({ where: { id: userId }, data: { pendingEmail: null } }),
+    prisma.authToken.updateMany({
+      where: { userId, type: 'EMAIL_CHANGE', usedAt: null },
+      data: { usedAt: new Date() },
+    }),
+  ]);
+  res.json({ user: publicUser(updated) });
 });
 
 router.post('/resend-verification', requireAuth, emailLimiter, async (req, res) => {

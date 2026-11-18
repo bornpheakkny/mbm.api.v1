@@ -10,6 +10,7 @@ import type { AuthToken, AuthTokenType, User } from '../generated/prisma/client'
 
 export const TTL = {
   EMAIL_VERIFY: 24 * 60 * 60 * 1000,
+  EMAIL_CHANGE: 24 * 60 * 60 * 1000,
   PASSWORD_RESET: 60 * 60 * 1000,
   MFA_CHALLENGE: 10 * 60 * 1000,
   MFA_EMAIL_SETUP: 10 * 60 * 1000,

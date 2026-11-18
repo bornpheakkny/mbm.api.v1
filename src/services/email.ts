@@ -71,6 +71,40 @@ export function verifyEmailMessage(to: string, name: string, token: string): Ema
   };
 }
 
+export function confirmEmailChangeMessage(to: string, name: string, token: string): Email {
+  const url = `${env.APP_URL}/verify-email?token=${token}`;
+  return {
+    to,
+    subject: 'Confirm your new email address',
+    text: `Hi ${name},
+
+Confirm ${to} as the new email for your Budget Manager account:
+${url}
+
+The link expires in 24 hours. Until you confirm, your account keeps its current email.`,
+    html: layout(
+      'Confirm your new email',
+      `<p>Hi ${esc(name)},</p><p>Confirm <strong>${esc(to)}</strong> as the new email for your account.</p>${button(url, 'Confirm new email')}${footer('The link expires in 24 hours. Until you confirm, your account keeps its current email. If you did not ask for this, ignore this email.')}`,
+    ),
+  };
+}
+
+export function emailChangedNotice(to: string, name: string, newEmail: string): Email {
+  return {
+    to,
+    subject: 'Your account email was changed',
+    text: `Hi ${name},
+
+The email for your Budget Manager account was changed to ${newEmail}. You won't receive account emails at this address any more.
+
+If you didn't do this, contact your administrator right away.`,
+    html: layout(
+      'Your account email was changed',
+      `<p>Hi ${esc(name)},</p><p>The email for your account was changed to <strong>${esc(newEmail)}</strong>. You won't receive account emails at this address any more.</p>${footer("If you didn't do this, contact your administrator right away.")}`,
+    ),
+  };
+}
+
 export function resetPasswordMessage(to: string, name: string, token: string): Email {
   const url = `${env.APP_URL}/reset-password?token=${token}`;
   return {

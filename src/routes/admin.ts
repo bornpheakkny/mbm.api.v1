@@ -10,7 +10,8 @@ import { badRequest, conflict, forbidden, notFound } from '../lib/http';
 import { publicUser } from '../lib/users';
 import { uid } from '../middleware/auth';
 import { defaultCategoryData } from '../services/defaultCategories';
-import { clearMfa } from '../services/authTokens';
+import { clearMfa, issueToken } from '../services/authTokens';
+import { sendEmailInBackground, verifyEmailMessage } from '../services/email';
 import { isRootAdmin } from '../services/bootstrapAdmin';
 import { CurrencySchema, EmailSchema, NameSchema, PasswordSchema } from './auth';
 import type { Prisma } from '../generated/prisma/client';
@@ -134,7 +135,16 @@ router.patch('/users/:id', async (req, res) => {
     throw conflict('Email is already registered');
   }
 
-  const user = await prisma.user.update({ where: { id: target.id }, data: body, include: withStats });
+  const user = await prisma.user.update({
+    where: { id: target.id },
+    // A new address set by an admin still has to be confirmed by its owner
+    data: { ...body, ...(changingEmail && { emailVerifiedAt: null, pendingEmail: null }) },
+    include: withStats,
+  });
+  if (changingEmail) {
+    const { token } = await issueToken(user.id, 'EMAIL_VERIFY');
+    sendEmailInBackground(verifyEmailMessage(user.email, user.name, token));
+  }
   res.json({ user: adminView(user) });
 });
 

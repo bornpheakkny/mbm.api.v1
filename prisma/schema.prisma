@@ -30,6 +30,7 @@ enum MfaMethod {
 
 enum AuthTokenType {
   EMAIL_VERIFY
+  EMAIL_CHANGE
   PASSWORD_RESET
   MFA_CHALLENGE
   MFA_EMAIL_SETUP
@@ -50,6 +51,8 @@ model User {
   active            Boolean        @default(true)
   lastLoginAt       DateTime?
   emailVerifiedAt   DateTime?
+  /// New address waiting for confirmation (Change email)
+  pendingEmail      String?
   /// Bumped on password change/reset to invalidate existing sessions
   tokenVersion      Int            @default(0)
   /// null = two-step verification off
