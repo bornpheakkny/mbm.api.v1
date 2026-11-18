@@ -8,7 +8,7 @@ import QRCode from 'qrcode';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
 import { badRequest, notFound } from '../lib/http';
-import { decrypt, encrypt } from '../lib/crypto';
+import { decrypt, encrypt, sha256 } from '../lib/crypto';
 import { generateTotpSecret, totpUri, verifyTotp } from '../lib/totp';
 import { publicUser } from '../lib/users';
 import { uid } from '../middleware/auth';
@@ -91,8 +91,13 @@ router.post('/email/setup', emailLimiter, async (req, res) => {
   const user = await currentUser(uid(req));
   if (!user.emailVerifiedAt) throw badRequest('Verify your email address first');
   await assertCooldown(user.id, 'MFA_EMAIL_SETUP');
-  const { code } = await issueToken(user.id, 'MFA_EMAIL_SETUP', { withCode: true });
-  await sendEmail(mfaCodeMessage(user.email, user.name, code!, 'setup'));
+  const { token, code } = await issueToken(user.id, 'MFA_EMAIL_SETUP', { withCode: true });
+  try {
+    await sendEmail(mfaCodeMessage(user.email, user.name, code!, 'setup'));
+  } catch (err) {
+    await prisma.authToken.deleteMany({ where: { tokenHash: sha256(token) } }); // allow an immediate retry
+    throw err;
+  }
   res.json({ ok: true });
 });
 

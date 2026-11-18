@@ -20,6 +20,7 @@ import {
   remainingRecoveryCodes,
 } from '../services/authTokens';
 import {
+  EMAIL_FAILED_MESSAGE,
   confirmEmailChangeMessage,
   emailChangedNotice,
   mfaCodeMessage,
@@ -62,9 +63,26 @@ const maskEmail = (email: string) => {
   return `${local.slice(0, 2)}${'*'.repeat(Math.max(1, local.length - 2))}@${domain}`;
 };
 
-async function sendVerification(user: Pick<User, 'id' | 'email' | 'name'>) {
+/** Deletes a just-issued token when its email couldn't be sent, so the user can retry right away (no cooldown) */
+const discardToken = (token: string) => prisma.authToken.deleteMany({ where: { tokenHash: sha256(token) } });
+
+/**
+ * Emails a verification link. On sign-up it's sent in the background (registration must not fail
+ * because of email); from "Resend link" the user waits, so a failure is reported to them.
+ */
+async function sendVerification(user: Pick<User, 'id' | 'email' | 'name'>, opts: { background?: boolean } = {}) {
   const { token } = await issueToken(user.id, 'EMAIL_VERIFY');
-  sendEmailInBackground(verifyEmailMessage(user.email, user.name, token));
+  const message = verifyEmailMessage(user.email, user.name, token);
+  if (opts.background) {
+    sendEmail(message).catch(() => discardToken(token));
+    return;
+  }
+  try {
+    await sendEmail(message);
+  } catch (err) {
+    await discardToken(token);
+    throw err;
+  }
 }
 
 /** Completes a login: records it and returns the session */
@@ -101,7 +119,7 @@ router.post('/register', emailLimiter, async (req, res) => {
     return created;
   });
 
-  await sendVerification(user);
+  await sendVerification(user, { background: true });
   res.status(201).json({ token: sessionToken(user), user: publicUser(user) });
 });
 
@@ -121,9 +139,16 @@ router.post('/login', authLimiter, async (req, res) => {
   if (!user.mfaMethod) return res.json(await finishLogin(user.id));
 
   const { token: mfaToken, code } = await issueToken(user.id, 'MFA_CHALLENGE', { withCode: user.mfaMethod === 'EMAIL' });
-  if (code) await sendEmail(mfaCodeMessage(user.email, user.name, code, 'login'));
+  let emailFailed = false;
+  if (code) {
+    try {
+      await sendEmail(mfaCodeMessage(user.email, user.name, code, 'login'));
+    } catch {
+      emailFailed = true; // the code screen explains this and offers backup codes
+    }
+  }
 
-  res.json({ mfaRequired: true, method: user.mfaMethod, mfaToken, emailHint: maskEmail(user.email) });
+  res.json({ mfaRequired: true, method: user.mfaMethod, mfaToken, emailHint: maskEmail(user.email), emailFailed });
 });
 
 /** Step 2: the authenticator / emailed code, or a backup code */
@@ -154,7 +179,12 @@ router.post('/login/mfa/resend', emailLimiter, async (req, res) => {
 
   await assertCooldown(user.id, 'MFA_CHALLENGE');
   const { token, code } = await issueToken(user.id, 'MFA_CHALLENGE', { withCode: true });
-  await sendEmail(mfaCodeMessage(user.email, user.name, code!, 'login'));
+  try {
+    await sendEmail(mfaCodeMessage(user.email, user.name, code!, 'login'));
+  } catch {
+    // The new challenge replaced the old one, so hand it back even though the email failed
+    return res.status(503).json({ error: EMAIL_FAILED_MESSAGE, mfaToken: token });
+  }
   res.json({ mfaToken: token });
 });
 
@@ -204,7 +234,12 @@ router.post('/verify-email', authLimiter, async (req, res) => {
 
 async function sendEmailChange(user: Pick<User, 'id' | 'name'>, newEmail: string) {
   const { token } = await issueToken(user.id, 'EMAIL_CHANGE');
-  sendEmailInBackground(confirmEmailChangeMessage(newEmail, user.name, token));
+  try {
+    await sendEmail(confirmEmailChangeMessage(newEmail, user.name, token));
+  } catch (err) {
+    await discardToken(token);
+    throw err;
+  }
 }
 
 /**
@@ -223,8 +258,8 @@ router.post('/change-email', requireAuth, emailLimiter, async (req, res) => {
   if (taken && !(await canReclaim(taken))) throw conflict('Email is already registered');
 
   await assertCooldown(user.id, 'EMAIL_CHANGE');
+  await sendEmailChange(user, body.newEmail); // throws 503 if the email can't be sent; nothing is changed then
   const updated = await prisma.user.update({ where: { id: user.id }, data: { pendingEmail: body.newEmail } });
-  await sendEmailChange(user, body.newEmail);
   res.json({ user: publicUser(updated) });
 });
 
@@ -269,7 +304,8 @@ router.post('/forgot-password', emailLimiter, async (req, res) => {
     try {
       await assertCooldown(user.id, 'PASSWORD_RESET');
       const { token } = await issueToken(user.id, 'PASSWORD_RESET');
-      sendEmailInBackground(resetPasswordMessage(user.email, user.name, token));
+      // Background: the reply must look the same whether or not the account exists
+      sendEmail(resetPasswordMessage(user.email, user.name, token)).catch(() => discardToken(token));
     } catch (err) {
       if (!(err instanceof HttpError && err.status === 429)) throw err;
     }

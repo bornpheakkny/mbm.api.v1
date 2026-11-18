@@ -3,6 +3,7 @@
  * which may block SMTP ports). Without RESEND_API_KEY the email is printed to the console.
  */
 import { env } from '../config/env';
+import { HttpError } from '../lib/http';
 
 interface Email {
   to: string;
@@ -11,29 +12,53 @@ interface Email {
   html: string;
 }
 
+/** Shown to users when an email they are waiting for could not be sent */
+export const EMAIL_FAILED_MESSAGE = "We couldn't send the email right now. Please try again in a few minutes.";
+
+const printToConsole = (email: Email, why: string) =>
+  console.log(`\n📧 [email not sent — ${why}]\nTo: ${email.to}\nSubject: ${email.subject}\n\n${email.text}\n`);
+
+/**
+ * Sends an email, or throws HttpError 503 (EMAIL_FAILED_MESSAGE) if the provider refuses it.
+ * In development a refused email is also printed to the console so its link/code can still be used.
+ */
 export async function sendEmail(email: Email) {
-  if (!env.RESEND_API_KEY) {
-    console.log(
-      `\n📧 [email not sent — RESEND_API_KEY is not set]\nTo: ${email.to}\nSubject: ${email.subject}\n\n${email.text}\n`,
-    );
-    return;
+  if (!env.RESEND_API_KEY) return printToConsole(email, 'RESEND_API_KEY is not set');
+
+  let res: Response;
+  try {
+    res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: env.EMAIL_FROM, to: [email.to], subject: email.subject, text: email.text, html: email.html }),
+    });
+  } catch (err) {
+    console.error(`❌ Email to ${email.to} failed: could not reach Resend`, err);
+    if (env.NODE_ENV !== 'production') printToConsole(email, 'Resend unreachable');
+    throw new HttpError(503, EMAIL_FAILED_MESSAGE);
   }
 
-  const res = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from: env.EMAIL_FROM, to: [email.to], subject: email.subject, text: email.text, html: email.html }),
-  });
   if (!res.ok) {
-    const detail = await res.text().catch(() => '');
-    throw new Error(`Resend error ${res.status}: ${detail}`);
+    const body = await res.text().catch(() => '');
+    let reason = body;
+    try {
+      reason = (JSON.parse(body) as { message?: string }).message ?? body;
+    } catch {
+      // not JSON — keep the raw text
+    }
+    console.error(`❌ Email "${email.subject}" to ${email.to} rejected by Resend (${res.status}): ${reason}`);
+    if (/testing emails|verify a domain/i.test(reason)) {
+      console.error('   → The resend.dev test sender only delivers to your Resend account email. Verify a domain and set EMAIL_FROM.');
+    }
+    if (env.NODE_ENV !== 'production') printToConsole(email, `Resend refused it (${res.status})`);
+    throw new HttpError(503, EMAIL_FAILED_MESSAGE);
   }
   if (env.NODE_ENV !== 'production') console.log(`📧 Sent "${email.subject}" to ${email.to}`);
 }
 
-/** Send without failing the request; delivery problems are logged */
+/** Send without failing the request (the user isn't waiting on it); failures are logged */
 export function sendEmailInBackground(email: Email) {
-  sendEmail(email).catch((err) => console.error('❌ Email failed:', err));
+  sendEmail(email).catch(() => undefined); // sendEmail already logged the reason
 }
 
 // ---------- Templates ----------
