@@ -11,7 +11,9 @@ import type { AuthToken, AuthTokenType, User } from '../generated/prisma/client'
 export const TTL = {
   EMAIL_VERIFY: 24 * 60 * 60 * 1000,
   EMAIL_CHANGE: 24 * 60 * 60 * 1000,
-  PASSWORD_RESET: 60 * 60 * 1000,
+  SIGNUP_VERIFY: 30 * 60 * 1000,
+  PHONE_CHANGE: 15 * 60 * 1000,
+  PASSWORD_RESET: 30 * 60 * 1000,
   MFA_CHALLENGE: 10 * 60 * 1000,
   MFA_EMAIL_SETUP: 10 * 60 * 1000,
 } satisfies Record<AuthTokenType, number>;
@@ -41,23 +43,36 @@ export async function assertCooldown(userId: string, type: AuthTokenType) {
  * Creates a token (and optionally a 6-digit code) of the given type.
  * Earlier unused tokens of the same type are invalidated.
  */
-export async function issueToken(userId: string, type: AuthTokenType, opts: { withCode?: boolean } = {}) {
+export async function issueToken(
+  userId: string,
+  type: AuthTokenType,
+  opts: { withCode?: boolean; channel?: 'email' | 'sms'; keepOthers?: boolean } = {},
+) {
   const token = randomToken();
   const code = opts.withCode ? randomCode() : undefined;
   await prisma.$transaction([
-    prisma.authToken.updateMany({ where: { userId, type, usedAt: null }, data: { usedAt: new Date() } }),
+    // keepOthers: leave earlier codes working until this one is delivered (see retireOthers)
+    ...(opts.keepOthers ? [] : [prisma.authToken.updateMany({ where: { userId, type, usedAt: null }, data: { usedAt: new Date() } })]),
     prisma.authToken.create({
       data: {
         userId,
         type,
         tokenHash: sha256(token),
         codeHash: code ? sha256(code) : null,
+        channel: opts.channel ?? null,
         expiresAt: new Date(Date.now() + TTL[type]),
       },
     }),
   ]);
   return { token, code };
 }
+
+/** Cancels every other unused token of this type once `token` has been delivered */
+export const retireOthers = (userId: string, type: AuthTokenType, token: string) =>
+  prisma.authToken.updateMany({
+    where: { userId, type, usedAt: null, NOT: { tokenHash: sha256(token) } },
+    data: { usedAt: new Date() },
+  });
 
 /** Finds a live (unused, unexpired, attempts left) token or throws 400 */
 export async function findLiveToken(rawToken: string, type: AuthTokenType, message: string) {

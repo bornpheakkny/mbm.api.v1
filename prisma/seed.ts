@@ -53,10 +53,10 @@ const expenses: [string, string, string, number][] = [
 
 async function main() {
   const email = 'demo@mbm.app';
-  await prisma.user.deleteMany({ where: { email } });
+  await prisma.user.deleteMany({ where: { OR: [{ email }, { username: 'demo' }] } });
 
   const user = await prisma.user.create({
-    data: { email, name: 'Demo User', passwordHash: await bcrypt.hash('demo12345', 10), emailVerifiedAt: new Date() },
+    data: { email, username: 'demo', name: 'Demo User', passwordHash: await bcrypt.hash('demo12345', 10), emailVerifiedAt: new Date() },
   });
   await prisma.category.createMany({ data: defaultCategoryData(user.id) });
   const cats = await prisma.category.findMany({ where: { userId: user.id } });

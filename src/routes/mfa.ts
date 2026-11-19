@@ -59,7 +59,7 @@ router.post('/totp/setup', async (req, res) => {
   const secret = generateTotpSecret();
   await prisma.user.update({ where: { id: user.id }, data: { totpPendingSecret: encrypt(secret) } });
 
-  const otpauthUrl = totpUri(secret, user.email);
+  const otpauthUrl = totpUri(secret, user.email ?? user.username);
   const qrDataUrl = await QRCode.toDataURL(otpauthUrl, { margin: 1, width: 220 });
   res.json({ secret, otpauthUrl, qrDataUrl });
 });
@@ -89,7 +89,7 @@ router.post('/totp/enable', authLimiter, async (req, res) => {
 /** Emails a 6-digit code to confirm email-based two-step verification */
 router.post('/email/setup', emailLimiter, async (req, res) => {
   const user = await currentUser(uid(req));
-  if (!user.emailVerifiedAt) throw badRequest('Verify your email address first');
+  if (!user.email || !user.emailVerifiedAt) throw badRequest('Add and verify an email address first');
   await assertCooldown(user.id, 'MFA_EMAIL_SETUP');
   const { token, code } = await issueToken(user.id, 'MFA_EMAIL_SETUP', { withCode: true });
   try {

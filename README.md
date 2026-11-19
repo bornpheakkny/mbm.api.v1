@@ -17,6 +17,11 @@ New users get default categories: Salary, Freelance, Other (income) and Rent, Ut
 
 ## Accounts & roles
 
+- **Sign-up** needs a **username** plus an **email or phone number**. A 6-digit code is sent there (email via Brevo/Resend, SMS via Twilio); the account can't be used until the code is entered (`POST /api/auth/register` → `POST /api/auth/verify`).
+- **Login** accepts username, email or phone + password. Accounts that never verified get a code at login first.
+- **Forgot username**: `POST /api/auth/forgot-username` sends it to the email/phone. **Forgot password**: `POST /api/auth/forgot-password` sends a code; `POST /api/auth/reset-password` sets the new password. Both reply the same whether or not the account exists.
+- Users can change their username and add/change/remove a phone number (verified by SMS) in My account.
+
 - Anyone can sign up (`/api/auth/register`). Every account is a `USER` with its **own private budget**: categories, budgets and entries are scoped by `userId`.
 - **Root admin**: on startup the API creates the account in `ADMIN_EMAIL` / `ADMIN_PASSWORD` if it doesn't exist (an existing user with that email is promoted). The root admin can't be demoted, disabled or deleted, and only they can reset their own password.
 - **Admins** manage accounts (create, edit, change role, enable/disable, reset password, delete). They cannot see other users' budget data.

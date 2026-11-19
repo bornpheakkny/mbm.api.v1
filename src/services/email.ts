@@ -22,19 +22,48 @@ const printToConsole = (email: Email, why: string) =>
  * Sends an email, or throws HttpError 503 (EMAIL_FAILED_MESSAGE) if the provider refuses it.
  * In development a refused email is also printed to the console so its link/code can still be used.
  */
+/** "Budget Manager <me@gmail.com>" → { name, email } */
+function parseFrom(from: string) {
+  const m = from.match(/^\s*(.*?)\s*<([^>]+)>\s*$/);
+  return m ? { name: m[1] || 'Budget Manager', email: m[2] } : { name: 'Budget Manager', email: from.trim() };
+}
+
+/** Which provider sends email: Brevo if configured, else Resend, else none (console) */
+export const emailProvider = (): 'brevo' | 'resend' | null =>
+  env.BREVO_API_KEY ? 'brevo' : env.RESEND_API_KEY ? 'resend' : null;
+
+function providerRequest(provider: 'brevo' | 'resend', email: Email) {
+  if (provider === 'brevo') {
+    return fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: { 'api-key': env.BREVO_API_KEY!, 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        sender: parseFrom(env.EMAIL_FROM),
+        to: [{ email: email.to }],
+        subject: email.subject,
+        htmlContent: email.html,
+        textContent: email.text,
+      }),
+    });
+  }
+  return fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from: env.EMAIL_FROM, to: [email.to], subject: email.subject, text: email.text, html: email.html }),
+  });
+}
+
 export async function sendEmail(email: Email) {
-  if (!env.RESEND_API_KEY) return printToConsole(email, 'RESEND_API_KEY is not set');
+  const provider = emailProvider();
+  if (!provider) return printToConsole(email, 'no email provider configured (BREVO_API_KEY / RESEND_API_KEY)');
+  const label = provider === 'brevo' ? 'Brevo' : 'Resend';
 
   let res: Response;
   try {
-    res = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: env.EMAIL_FROM, to: [email.to], subject: email.subject, text: email.text, html: email.html }),
-    });
+    res = await providerRequest(provider, email);
   } catch (err) {
-    console.error(`❌ Email to ${email.to} failed: could not reach Resend`, err);
-    if (env.NODE_ENV !== 'production') printToConsole(email, 'Resend unreachable');
+    console.error(`❌ Email to ${email.to} failed: could not reach ${label}`, err);
+    if (env.NODE_ENV !== 'production') printToConsole(email, `${label} unreachable`);
     throw new HttpError(503, EMAIL_FAILED_MESSAGE);
   }
 
@@ -46,14 +75,17 @@ export async function sendEmail(email: Email) {
     } catch {
       // not JSON — keep the raw text
     }
-    console.error(`❌ Email "${email.subject}" to ${email.to} rejected by Resend (${res.status}): ${reason}`);
+    console.error(`❌ Email "${email.subject}" to ${email.to} rejected by ${label} (${res.status}): ${reason}`);
     if (/testing emails|verify a domain/i.test(reason)) {
-      console.error('   → The resend.dev test sender only delivers to your Resend account email. Verify a domain and set EMAIL_FROM.');
+      console.error('   → The resend.dev test sender only delivers to your Resend account email. Use Brevo or verify a domain.');
     }
-    if (env.NODE_ENV !== 'production') printToConsole(email, `Resend refused it (${res.status})`);
+    if (provider === 'brevo' && /sender/i.test(reason)) {
+      console.error('   → EMAIL_FROM must be a sender you verified in Brevo (Senders, domains & dedicated IPs → Senders).');
+    }
+    if (env.NODE_ENV !== 'production') printToConsole(email, `${label} refused it (${res.status})`);
     throw new HttpError(503, EMAIL_FAILED_MESSAGE);
   }
-  if (env.NODE_ENV !== 'production') console.log(`📧 Sent "${email.subject}" to ${email.to}`);
+  if (env.NODE_ENV !== 'production') console.log(`📧 Sent "${email.subject}" to ${email.to} via ${label}`);
 }
 
 /** Send without failing the request (the user isn't waiting on it); failures are logged */
@@ -153,6 +185,45 @@ export function mfaCodeMessage(to: string, name: string, code: string, purpose: 
     html: layout(
       purpose === 'login' ? 'Your sign-in code' : 'Your verification code',
       `<p>Hi ${esc(name)},</p><p>${esc(intro)}</p>${codeBox(code)}${footer("It expires in 10 minutes. If this wasn't you, change your password.")}`,
+    ),
+  };
+}
+
+/** 6-digit code to finish signing up, or to confirm the account before the first sign-in */
+export function signupCodeMessage(to: string, name: string, code: string): Email {
+  return {
+    to,
+    subject: `Your verification code: ${code}`,
+    text: `Hi ${name},\n\nYour Budget Manager verification code is ${code}\n\nIt expires in 30 minutes. If you did not create an account, ignore this email.`,
+    html: layout(
+      'Confirm your account',
+      `<p>Hi ${esc(name)},</p><p>Enter this code to finish creating your account:</p>${codeBox(code)}${footer('It expires in 30 minutes. If you did not create an account, ignore this email.')}`,
+    ),
+  };
+}
+
+/** 6-digit code to choose a new password */
+export function resetCodeMessage(to: string, name: string, code: string): Email {
+  return {
+    to,
+    subject: `Your password reset code: ${code}`,
+    text: `Hi ${name},\n\nYour password reset code is ${code}\n\nIt expires in 30 minutes. If you did not ask for this, ignore this email; your password stays the same.`,
+    html: layout(
+      'Reset your password',
+      `<p>Hi ${esc(name)},</p><p>Enter this code to choose a new password:</p>${codeBox(code)}${footer('It expires in 30 minutes. If you did not ask for this, ignore this email; your password stays the same.')}`,
+    ),
+  };
+}
+
+/** Reminds the user of their username */
+export function usernameReminderMessage(to: string, name: string, username: string): Email {
+  return {
+    to,
+    subject: 'Your Budget Manager username',
+    text: `Hi ${name},\n\nYour username is: ${username}\n\nYou can log in with it, or with this email address.`,
+    html: layout(
+      'Your username',
+      `<p>Hi ${esc(name)},</p><p>Your username is:</p>${codeBox(esc(username))}${footer('You can log in with it, or with this email address. If you did not ask for this, you can ignore this email.')}`,
     ),
   };
 }

@@ -3,14 +3,31 @@ import { normalizePreferences } from './preferences';
 
 type UserFields = Pick<
   User,
-  'id' | 'email' | 'name' | 'currency' | 'role' | 'active' | 'lastLoginAt' | 'createdAt' | 'emailVerifiedAt' | 'mfaMethod' | 'pendingEmail' | 'preferences'
+  | 'id'
+  | 'username'
+  | 'email'
+  | 'phone'
+  | 'name'
+  | 'currency'
+  | 'role'
+  | 'active'
+  | 'lastLoginAt'
+  | 'createdAt'
+  | 'emailVerifiedAt'
+  | 'phoneVerifiedAt'
+  | 'mfaMethod'
+  | 'pendingEmail'
+  | 'pendingPhone'
+  | 'preferences'
 >;
 
 /** Strip secrets (password hash, MFA secrets, token version) before sending a user to the client */
 export function publicUser(u: UserFields) {
   return {
     id: u.id,
+    username: u.username,
     email: u.email,
+    phone: u.phone,
     name: u.name,
     currency: u.currency,
     role: u.role,
@@ -18,8 +35,10 @@ export function publicUser(u: UserFields) {
     lastLoginAt: u.lastLoginAt,
     createdAt: u.createdAt,
     emailVerified: Boolean(u.emailVerifiedAt),
+    phoneVerified: Boolean(u.phoneVerifiedAt),
     mfaMethod: u.mfaMethod,
     pendingEmail: u.pendingEmail,
+    pendingPhone: u.pendingPhone,
     preferences: normalizePreferences(u.preferences),
   };
 }

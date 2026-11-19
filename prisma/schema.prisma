@@ -31,6 +31,8 @@ enum MfaMethod {
 enum AuthTokenType {
   EMAIL_VERIFY
   EMAIL_CHANGE
+  SIGNUP_VERIFY
+  PHONE_CHANGE
   PASSWORD_RESET
   MFA_CHALLENGE
   MFA_EMAIL_SETUP
@@ -43,7 +45,9 @@ enum CategoryType {
 
 model User {
   id                String         @id @default(cuid())
-  email             String         @unique
+  /// Login name, lowercase (a-z 0-9 . _), unique
+  username          String         @unique @default(dbgenerated("('user_'::text || substr(md5((random())::text), 1, 10))"))
+  email             String?        @unique
   name              String
   passwordHash      String
   currency          String         @default("USD")
@@ -53,6 +57,11 @@ model User {
   emailVerifiedAt   DateTime?
   /// New address waiting for confirmation (Change email)
   pendingEmail      String?
+  /// E.164, e.g. +85512345678
+  phone             String?        @unique
+  phoneVerifiedAt   DateTime?
+  /// New number waiting for its SMS code
+  pendingPhone      String?
   /// Display settings (bar colors, badge style); see src/lib/preferences.ts
   preferences       Json           @default("{}")
   /// Bumped on password change/reset to invalidate existing sessions
@@ -80,6 +89,8 @@ model AuthToken {
   tokenHash String        @unique
   /// sha256 of a 6-digit code sent by email (MFA)
   codeHash  String?
+  /// Where the code was sent: "email" or "sms"
+  channel   String?
   attempts  Int           @default(0)
   expiresAt DateTime
   usedAt    DateTime?

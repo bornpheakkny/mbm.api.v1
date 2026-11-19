@@ -29,11 +29,21 @@ services:
         sync: false # change it after first login
       - key: ADMIN_NAME
         value: Administrator
+      - key: ADMIN_USERNAME
+        value: admin
       - key: APP_URL
         sync: false # your Vercel URL, used in email links
-      - key: RESEND_API_KEY
-        sync: false # from resend.com → API Keys
+      - key: BREVO_API_KEY
+        sync: false # brevo.com -> SMTP & API -> API keys
       - key: EMAIL_FROM
-        sync: false # e.g. Budget Manager <no-reply@yourdomain.com>
+        sync: false # a sender verified in Brevo, e.g. Budget Manager <you@gmail.com>
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM
+        sync: false # Twilio number (+1...) or Messaging Service SID (MG...)
+      - key: DEFAULT_PHONE_COUNTRY
+        value: KH
       - key: MFA_ENCRYPTION_KEY
         generateValue: true

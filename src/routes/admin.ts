@@ -14,6 +14,7 @@ import { clearMfa, issueToken } from '../services/authTokens';
 import { sendEmailInBackground, verifyEmailMessage } from '../services/email';
 import { isRootAdmin } from '../services/bootstrapAdmin';
 import { CurrencySchema, EmailSchema, NameSchema, PasswordSchema } from './auth';
+import { PhoneSchema, UsernameSchema } from '../lib/contacts';
 import type { Prisma } from '../generated/prisma/client';
 
 const router = Router();
@@ -26,21 +27,42 @@ const ListQuery = z.object({
   status: z.enum(['active', 'disabled']).optional(),
 });
 
-const CreateSchema = z.object({
-  name: NameSchema,
-  email: EmailSchema,
-  password: PasswordSchema,
-  currency: CurrencySchema.optional(),
-  role: RoleSchema.optional(),
-});
+const CreateSchema = z
+  .object({
+    name: NameSchema,
+    username: UsernameSchema,
+    email: EmailSchema.optional(),
+    phone: PhoneSchema.optional(),
+    password: PasswordSchema,
+    currency: CurrencySchema.optional(),
+    role: RoleSchema.optional(),
+  })
+  .refine((b) => b.email || b.phone, { message: 'Enter an email or a phone number', path: ['email'] });
 
 const UpdateSchema = z.object({
   name: NameSchema.optional(),
+  username: UsernameSchema.optional(),
   email: EmailSchema.optional(),
+  phone: PhoneSchema.optional(),
   currency: CurrencySchema.optional(),
   role: RoleSchema.optional(),
   active: z.boolean().optional(),
 });
+
+/** Throws 409 if username / email / phone belongs to a different account */
+async function assertFree(fields: { username?: string; email?: string; phone?: string }, exceptId?: string) {
+  const checks: [keyof typeof fields, string][] = [
+    ['username', 'That username is taken'],
+    ['email', 'Email is already registered'],
+    ['phone', 'That phone number is used by another account'],
+  ];
+  for (const [field, message] of checks) {
+    const value = fields[field];
+    if (!value) continue;
+    const other = await prisma.user.findFirst({ where: { [field]: value }, select: { id: true } });
+    if (other && other.id !== exceptId) throw conflict(message);
+  }
+}
 
 const ResetPasswordSchema = z.object({ password: PasswordSchema });
 
@@ -71,7 +93,9 @@ router.get('/users', async (req, res) => {
       ...(q.q && {
         OR: [
           { name: { contains: q.q, mode: 'insensitive' } },
+          { username: { contains: q.q, mode: 'insensitive' } },
           { email: { contains: q.q, mode: 'insensitive' } },
+          { phone: { contains: q.q.replace(/[\s\-()]/g, '') } },
         ],
       }),
       ...(q.role && { role: q.role }),
@@ -93,16 +117,17 @@ router.get('/users', async (req, res) => {
 /** POST /api/admin/users — create an account (gets its own default categories) */
 router.post('/users', async (req, res) => {
   const body = CreateSchema.parse(req.body);
-  if (await prisma.user.findUnique({ where: { email: body.email } })) {
-    throw conflict('Email is already registered');
-  }
+  await assertFree(body);
+  // The owner verifies their email/phone with a code the first time they log in
   const passwordHash = await bcrypt.hash(body.password, 10);
 
   const user = await prisma.$transaction(async (tx) => {
     const created = await tx.user.create({
       data: {
         name: body.name,
-        email: body.email,
+        username: body.username,
+        email: body.email ?? null,
+        phone: body.phone ?? null,
         passwordHash,
         currency: body.currency ?? 'USD',
         role: body.role ?? 'USER',
@@ -124,6 +149,7 @@ router.patch('/users/:id', async (req, res) => {
   const demoting = body.role === 'USER' && target.role === 'ADMIN';
   const disabling = body.active === false && target.active;
   const changingEmail = body.email !== undefined && body.email !== target.email;
+  const changingPhone = body.phone !== undefined && body.phone !== target.phone;
 
   if (isRootAdmin(target.email) && (demoting || disabling || changingEmail)) {
     throw forbidden('The root admin account cannot be demoted, disabled or have its email changed');
@@ -131,17 +157,19 @@ router.patch('/users/:id', async (req, res) => {
   if (self && (demoting || disabling)) {
     throw forbidden('You cannot remove your own admin access or disable your own account');
   }
-  if (changingEmail && (await prisma.user.findUnique({ where: { email: body.email } }))) {
-    throw conflict('Email is already registered');
-  }
+  await assertFree({ username: body.username, email: changingEmail ? body.email : undefined, phone: changingPhone ? body.phone : undefined }, target.id);
 
   const user = await prisma.user.update({
     where: { id: target.id },
     // A new address set by an admin still has to be confirmed by its owner
-    data: { ...body, ...(changingEmail && { emailVerifiedAt: null, pendingEmail: null }) },
+    data: {
+      ...body,
+      ...(changingEmail && { emailVerifiedAt: null, pendingEmail: null }),
+      ...(changingPhone && { phoneVerifiedAt: null, pendingPhone: null }),
+    },
     include: withStats,
   });
-  if (changingEmail) {
+  if (changingEmail && user.email) {
     const { token } = await issueToken(user.id, 'EMAIL_VERIFY');
     sendEmailInBackground(verifyEmailMessage(user.email, user.name, token));
   }

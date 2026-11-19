@@ -7,7 +7,8 @@ import type { Role } from '../generated/prisma/client';
 
 export interface JwtPayload {
   sub: string;
-  email: string;
+  /** Not used for auth; kept for older tokens */
+  email?: string;
   /** user.tokenVersion when issued; bumped on password change/reset to end other sessions */
   ver?: number;
 }
@@ -20,8 +21,8 @@ declare module 'express-serve-static-core' {
 }
 
 /** Issue a session token for this user */
-export function sessionToken(user: { id: string; email: string; tokenVersion: number }): string {
-  return signToken({ sub: user.id, email: user.email, ver: user.tokenVersion });
+export function sessionToken(user: { id: string; tokenVersion: number }): string {
+  return signToken({ sub: user.id, ver: user.tokenVersion });
 }
 
 function signToken(payload: JwtPayload): string {

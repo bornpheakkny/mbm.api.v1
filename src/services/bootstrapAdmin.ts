@@ -35,6 +35,7 @@ export async function bootstrapAdmin() {
       const user = await tx.user.create({
         data: {
           email,
+          username: await freeUsername(env.ADMIN_USERNAME.toLowerCase()),
           name: env.ADMIN_NAME,
           passwordHash: await bcrypt.hash(env.ADMIN_PASSWORD!, 10),
           role: 'ADMIN',
@@ -51,7 +52,15 @@ export async function bootstrapAdmin() {
   }
 }
 
+/** `wanted`, or wanted2, wanted3… if it's already taken */
+async function freeUsername(wanted: string) {
+  for (let n = 1; ; n++) {
+    const candidate = n === 1 ? wanted : `${wanted}${n}`;
+    if (!(await prisma.user.findUnique({ where: { username: candidate } }))) return candidate;
+  }
+}
+
 /** The root admin (ADMIN_EMAIL) can't be demoted, disabled or deleted through the API. */
-export function isRootAdmin(email: string) {
-  return Boolean(env.ADMIN_EMAIL) && email.toLowerCase() === env.ADMIN_EMAIL!.toLowerCase();
+export function isRootAdmin(email: string | null | undefined) {
+  return Boolean(env.ADMIN_EMAIL && email) && email!.toLowerCase() === env.ADMIN_EMAIL!.toLowerCase();
 }
