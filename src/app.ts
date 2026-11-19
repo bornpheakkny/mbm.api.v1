@@ -13,6 +13,19 @@ import summaryRoutes from './routes/summary';
 import adminRoutes from './routes/admin';
 import mfaRoutes from './routes/mfa';
 
+/** CORS_ORIGIN entries may use * as a wildcard, e.g. https://mbm-app-v1-*.vercel.app for Vercel previews */
+const originPatterns = env.corsOrigins.map((o) =>
+  o === '*' ? /^.*$/ : new RegExp('^' + o.split('*').map((part) => part.replace(/[.+?^${}()|[\]\\/]/g, '\\$&')).join('[^/]*') + '$'),
+);
+const isAllowedOrigin = (origin: string) => originPatterns.some((re) => re.test(origin));
+
+const warned = new Set<string>();
+function warnRejectedOrigin(origin: string) {
+  if (warned.has(origin) || warned.size > 50) return;
+  warned.add(origin);
+  console.warn(`CORS: blocked request from ${origin}. Add it to CORS_ORIGIN (comma-separated) if it is your app.`);
+}
+
 export function createApp() {
   const app = express();
 
@@ -22,8 +35,10 @@ export function createApp() {
     cors({
       origin(origin, cb) {
         // allow non-browser clients (curl, health checks) and whitelisted origins
-        if (!origin || env.corsOrigins.includes('*') || env.corsOrigins.includes(origin)) return cb(null, true);
-        cb(new Error(`Origin ${origin} not allowed by CORS`));
+        if (!origin || isAllowedOrigin(origin)) return cb(null, true);
+        // Refuse without throwing: the browser gets no CORS headers and blocks the call (not a 500)
+        warnRejectedOrigin(origin);
+        cb(null, false);
       },
       credentials: true,
     }),

@@ -22,7 +22,7 @@ services:
       - key: JWT_EXPIRES_IN
         value: 7d
       - key: CORS_ORIGIN
-        sync: false # e.g. https://mbm-app-v1.vercel.app
+        sync: false # e.g. https://mbm-app-v1.vercel.app,https://mbm-app-v1-*.vercel.app
       - key: ADMIN_EMAIL
         sync: false # root admin login, created on first start
       - key: ADMIN_PASSWORD
