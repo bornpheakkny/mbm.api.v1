@@ -55,7 +55,14 @@ function providerRequest(provider: 'brevo' | 'resend', email: Email) {
 
 export async function sendEmail(email: Email) {
   const provider = emailProvider();
-  if (!provider) return printToConsole(email, 'no email provider configured (BREVO_API_KEY / RESEND_API_KEY)');
+  if (!provider) {
+    // In production nobody reads the console: fail loudly instead of pretending the email went out
+    if (env.NODE_ENV === 'production') {
+      console.error(`❌ Email "${email.subject}" to ${email.to} not sent: no email provider configured. Set BREVO_API_KEY and EMAIL_FROM.`);
+      throw new HttpError(503, EMAIL_FAILED_MESSAGE);
+    }
+    return printToConsole(email, 'no email provider configured (BREVO_API_KEY / RESEND_API_KEY)');
+  }
   const label = provider === 'brevo' ? 'Brevo' : 'Resend';
 
   let res: Response;

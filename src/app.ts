@@ -3,6 +3,8 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import { env } from './config/env';
+import { emailProvider } from './services/email';
+import { smsConfigured } from './services/sms';
 import { requireAdmin, requireAuth } from './middleware/auth';
 import { errorHandler, notFoundHandler } from './middleware/error';
 import authRoutes from './routes/auth';
@@ -47,7 +49,10 @@ export function createApp() {
   if (env.NODE_ENV !== 'test') app.use(morgan(env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
   app.get('/', (_req, res) => res.json({ name: 'mbm.api.v1', status: 'ok' }));
-  app.get('/api/health', (_req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
+  // email/sms show which delivery is active (no secrets), so a missing setting is easy to spot
+  app.get('/api/health', (_req, res) =>
+    res.json({ status: 'ok', time: new Date().toISOString(), email: emailProvider() ?? 'not configured', sms: smsConfigured() ? 'twilio' : 'not configured' }),
+  );
 
   app.use('/api/auth/mfa', requireAuth, mfaRoutes);
   app.use('/api/auth', authRoutes);

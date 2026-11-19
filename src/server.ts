@@ -3,6 +3,7 @@ import { createApp } from './app';
 import { prisma } from './lib/prisma';
 import { bootstrapAdmin } from './services/bootstrapAdmin';
 import { scheduleUnverifiedCleanup } from './services/unverifiedAccounts';
+import { emailProvider } from './services/email';
 
 const app = createApp();
 
@@ -11,6 +12,9 @@ scheduleUnverifiedCleanup();
 
 const server = app.listen(env.PORT, () => {
   console.log(`🚀 mbm.api.v1 listening on http://localhost:${env.PORT} (${env.NODE_ENV})`);
+  const provider = emailProvider();
+  if (provider) console.log(`📧 Email via ${provider === 'brevo' ? 'Brevo' : 'Resend'}, from ${env.EMAIL_FROM}`);
+  else console.warn(`⚠️  No email provider (BREVO_API_KEY)${env.NODE_ENV === 'production' ? ': sign-up and password reset by email will fail' : ': emails are printed here'}`);
 });
 
 async function shutdown(signal: string) {
