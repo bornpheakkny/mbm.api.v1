@@ -7,6 +7,7 @@ import { env } from '../config/env';
 import { isVerified } from '../lib/contacts';
 import { prisma } from '../lib/prisma';
 import type { Prisma, User } from '../generated/prisma/client';
+import { deleteExpiredPendingSignups } from './pendingSignups';
 
 const HOUR = 60 * 60 * 1000;
 /** Another sign-up can take an unverified account's username after this long */
@@ -48,9 +49,12 @@ export async function deleteStaleUnverified() {
   return count;
 }
 
-/** Runs the cleanup now and every 12 hours while the server is up */
+/** Runs the cleanup (old unverified accounts, expired pending sign-ups) now and every 12 hours */
 export function scheduleUnverifiedCleanup() {
-  const run = () => deleteStaleUnverified().catch((err) => console.error('❌ Unverified cleanup failed:', err));
+  const run = () =>
+    Promise.all([deleteStaleUnverified(), deleteExpiredPendingSignups()]).catch((err) =>
+      console.error('❌ Unverified cleanup failed:', err),
+    );
   void run();
   setInterval(run, CLEANUP_INTERVAL_MS).unref();
 }

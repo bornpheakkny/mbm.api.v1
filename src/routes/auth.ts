@@ -40,8 +40,9 @@ import {
   sendEmailInBackground,
   verifyEmailMessage,
 } from '../services/email';
-import type { Prisma, User } from '../generated/prisma/client';
+import type { PendingSignup, Prisma, User } from '../generated/prisma/client';
 import { PreferencesPatchSchema, normalizePreferences } from '../lib/preferences';
+import { assertPendingLive, checkPendingCode, findPendingSignup, resendPendingCode, startPendingSignup } from '../services/pendingSignups';
 
 const router = Router();
 
@@ -135,44 +136,65 @@ async function checkSignupConflicts(body: { username: string; email?: string; ph
 // ---------- Sign up (verified before the account can be used) ----------
 
 /**
- * Creates the account and sends a 6-digit code to the email or phone given.
- * The account can't be used until POST /verify confirms the code.
+ * Sends a 6-digit code to the email or phone given. No account is created yet: the details wait
+ * in PendingSignup and the account only exists once POST /verify confirms the code.
  */
 router.post('/register', emailLimiter, async (req, res) => {
   const body = RegisterSchema.parse(req.body);
-  const replace = await checkSignupConflicts(body);
+  await checkSignupConflicts(body); // early, friendly 409; checked again when the code is confirmed
   const passwordHash = await bcrypt.hash(body.password, 10);
-
-  const user = await prisma.$transaction(async (tx) => {
-    if (replace.length) await tx.user.deleteMany({ where: { id: { in: replace } } });
-    const created = await tx.user.create({
-      data: {
-        name: body.name,
-        username: body.username,
-        email: body.email ?? null,
-        phone: body.phone ?? null,
-        passwordHash,
-        currency: body.currency ?? 'USD',
-      },
-    });
-    await tx.category.createMany({ data: defaultCategoryData(created.id) });
-    return created;
-  });
-
-  try {
-    const sent = await sendContactCode(user, 'signup', body.email ? 'email' : 'sms');
-    res.status(201).json({ verificationRequired: true, verifyToken: sent.token, channel: sent.channel, hint: sent.hint });
-  } catch (err) {
-    // Couldn't deliver the code: undo the sign-up so the user can simply try again
-    await prisma.user.delete({ where: { id: user.id } }).catch(() => undefined);
-    throw err;
-  }
+  const sent = await startPendingSignup({ ...body, passwordHash }); // 503 if the code can't be delivered
+  res.status(201).json({ verificationRequired: true, verifyToken: sent.token, channel: sent.channel, hint: sent.hint });
 });
 
-/** Confirms the sign-up (or first-login) code, marks the email/phone verified and signs in */
+/** Creates the account for a confirmed pending sign-up (replacing abandoned unverified accounts it clashes with) */
+async function createAccountFromPending(p: PendingSignup) {
+  const contact = { username: p.username, email: p.email ?? undefined, phone: p.phone ?? undefined };
+  const replace = await checkSignupConflicts(contact); // 409 if someone else took it meanwhile
+  const now = new Date();
+  try {
+    return await prisma.$transaction(async (tx) => {
+      if (replace.length) await tx.user.deleteMany({ where: { id: { in: replace } } });
+      const created = await tx.user.create({
+        data: {
+          name: p.name,
+          username: p.username,
+          email: p.email,
+          phone: p.phone,
+          passwordHash: p.passwordHash,
+          currency: p.currency,
+          ...(p.channel === 'sms' ? { phoneVerifiedAt: now } : { emailVerifiedAt: now }),
+        },
+      });
+      await tx.category.createMany({ data: defaultCategoryData(created.id) });
+      // this sign-up and any other pending ones for the same username / email / phone
+      await tx.pendingSignup.deleteMany({
+        where: {
+          OR: [{ id: p.id }, { username: p.username }, ...(p.email ? [{ email: p.email }] : []), ...(p.phone ? [{ phone: p.phone }] : [])],
+        },
+      });
+      return created;
+    });
+  } catch (err) {
+    if ((err as { code?: string }).code === 'P2002') throw conflict('That username, email or phone was just registered. Please sign up again.');
+    throw err;
+  }
+}
+
+/** Confirms the sign-up code (creating the account) or a first-login code, then signs in */
 router.post('/verify', authLimiter, async (req, res) => {
   const body = VerifySchema.parse(req.body);
-  const row = await findLiveToken(body.verifyToken, 'SIGNUP_VERIFY', 'This code has expired. Request a new one.');
+
+  const pending = await findPendingSignup(body.verifyToken);
+  if (pending) {
+    assertPendingLive(pending);
+    await checkPendingCode(pending, body.code);
+    const created = await createAccountFromPending(pending);
+    return res.json(await finishLogin(created.id));
+  }
+
+  // An existing account that never verified, signing in for the first time
+  const row = await findLiveToken(body.verifyToken, 'SIGNUP_VERIFY', 'This code is no longer valid. Please sign up or log in again.');
   if (!codeMatches(row, body.code)) await failCode(row);
 
   const now = new Date();
@@ -188,6 +210,12 @@ router.post('/verify', authLimiter, async (req, res) => {
 /** Sends a new sign-up code. Returns a new verifyToken (the old code keeps working if sending fails). */
 router.post('/verify/resend', emailLimiter, async (req, res) => {
   const { verifyToken } = z.object({ verifyToken: TokenSchema }).parse(req.body);
+  const pending = await findPendingSignup(verifyToken);
+  if (pending) {
+    assertPendingLive(pending);
+    const sent = await resendPendingCode(pending);
+    return res.json({ verifyToken: sent.token, channel: sent.channel, hint: sent.hint });
+  }
   const row = await findLiveToken(verifyToken, 'SIGNUP_VERIFY', 'This sign-up expired. Please log in or sign up again.');
   await assertCooldown(row.userId, 'SIGNUP_VERIFY');
   const sent = await sendContactCode(row.user, 'signup', (row.channel as Channel) ?? 'email');

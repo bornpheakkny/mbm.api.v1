@@ -17,7 +17,7 @@ New users get default categories: Salary, Freelance, Other (income) and Rent, Ut
 
 ## Accounts & roles
 
-- **Sign-up** needs a **username** plus an **email or phone number**. A 6-digit code is sent there (email via Brevo/Resend, SMS via Twilio); the account can't be used until the code is entered (`POST /api/auth/register` → `POST /api/auth/verify`).
+- **Sign-up** needs a **username** plus an **email or phone number**. A 6-digit code is sent there (email via Brevo/Resend, SMS via Twilio); **no account is created until the code is entered**: the details wait in `PendingSignup` (`POST /api/auth/register`), and `POST /api/auth/verify` creates the account and signs in. Nothing is stored if the code can't be delivered; unconfirmed sign-ups expire after 30 minutes and are cleaned up automatically. Two people may start a sign-up with the same username; whoever confirms first gets it.
 - **Login** accepts username, email or phone + password. Accounts that never verified get a code at login first.
 - **Forgot username**: `POST /api/auth/forgot-username` sends it to the email/phone. **Forgot password**: `POST /api/auth/forgot-password` sends a code; `POST /api/auth/reset-password` sets the new password. Both reply the same whether or not the account exists.
 - Users can change their username and add/change/remove a phone number (verified by SMS) in My account.

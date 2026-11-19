@@ -39,6 +39,17 @@ export function pickChannel(user: CodeUser, prefer?: Channel): Channel | null {
   return null;
 }
 
+/** Sends a 6-digit code by email or SMS; throws (503) if it can't be delivered */
+export async function deliverCode(purpose: CodePurpose, channel: Channel, destination: string, name: string, code: string) {
+  if (channel === 'email') {
+    if (purpose === 'phone') throw badRequest('Phone codes are sent by SMS');
+    const message = purpose === 'signup' ? signupCodeMessage : resetCodeMessage;
+    await sendEmail(message(destination, name, code));
+  } else {
+    await sendSms(destination, SMS_TEXT[purpose](code));
+  }
+}
+
 /**
  * Creates a code token and delivers it. If delivery fails the token is deleted
  * (so the user can retry immediately) and the 503 error is re-thrown.
@@ -50,13 +61,7 @@ export async function sendContactCode(user: CodeUser, purpose: CodePurpose, chan
   // Earlier codes stay valid until this one is actually delivered
   const { token, code } = await issueToken(user.id, TOKEN_TYPE[purpose], { withCode: true, channel, keepOthers: true });
   try {
-    if (channel === 'email') {
-      if (purpose === 'phone') throw badRequest('Phone codes are sent by SMS');
-      const message = purpose === 'signup' ? signupCodeMessage : resetCodeMessage;
-      await sendEmail(message(destination, user.name, code!));
-    } else {
-      await sendSms(destination, SMS_TEXT[purpose](code!));
-    }
+    await deliverCode(purpose, channel, destination, user.name, code!);
   } catch (err) {
     await prisma.authToken.deleteMany({ where: { tokenHash: sha256(token) } });
     throw err;

@@ -162,3 +162,30 @@ model Transaction {
   @@index([userId, date])
   @@index([userId, type, date])
 }
+
+/// A sign-up waiting for its 6-digit code. The User row is only created once the code is confirmed.
+model PendingSignup {
+  id           String   @id @default(cuid())
+  name         String
+  username     String
+  email        String?
+  phone        String?
+  passwordHash String
+  currency     String   @default("USD")
+  /// "email" or "sms"
+  channel      String
+  /// sha256 of the verifyToken returned to the client
+  tokenHash    String   @unique
+  /// sha256 of the 6-digit code that was sent
+  codeHash     String
+  attempts     Int      @default(0)
+  expiresAt    DateTime
+  /// When the current code was sent (resend cooldown)
+  sentAt       DateTime @default(now())
+  createdAt    DateTime @default(now())
+
+  @@index([username])
+  @@index([email])
+  @@index([phone])
+  @@index([expiresAt])
+}
