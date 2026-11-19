@@ -49,6 +49,9 @@ export function createApp() {
   if (env.NODE_ENV !== 'test') app.use(morgan(env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
   app.get('/', (_req, res) => res.json({ name: 'mbm.api.v1', status: 'ok' }));
+  // Public settings the app needs before sign-in (e.g. hide phone sign-up when SMS isn't set up)
+  // In development SMS are printed to the console, so phone sign-up works there without Twilio
+  app.get('/api/config', (_req, res) => res.json({ sms: smsConfigured() || env.NODE_ENV !== 'production' }));
   // email/sms show which delivery is active (no secrets), so a missing setting is easy to spot
   app.get('/api/health', (_req, res) =>
     res.json({ status: 'ok', time: new Date().toISOString(), email: emailProvider() ?? 'not configured', sms: smsConfigured() ? 'twilio' : 'not configured' }),
